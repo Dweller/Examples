@@ -1,2 +1,2 @@
 # Examples
-Some code examples in different langauges
+Some simple code examples in different langauges
