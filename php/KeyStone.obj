@@ -1,0 +1,478 @@
+<SCRIPT LANGUAGE=php>
+
+if(!$KEYSTONE_OBJECT_DEFINED)
+{
+$KEYSTONE_OBJECT_DEFINED=TRUE;
+
+/*
+	System level defines
+*/
+define	(MEDIA_HOME_DEFAULT,	"/home/msgmedia");
+define	(MEDIA_HOST_DEFAULT,	"localhost");
+define	(MEDIA_PORT_DEFAULT,	3153);
+define	(MEDIA_LANG_DEFAULT,	"default");
+define 	(MEDIA_REMOTE_DEFAULT,	"");
+
+/**
+ *	<B>KeyStone</B> 
+ *	Base object for all KeyStone objects, includes grabing 
+ *  of all common environment variables etc.
+ *
+ *  <BR><B>Last Changed by:</B> $Author: sbanks $
+ *
+ *  <B>Revision History:</B><I>
+ *  $Logs$
+ *
+ *  </I>
+ *
+ *	@author 	Simon Banks
+ *  @version    $Revision: 1.18 $
+ */
+class KeyStone
+{
+	/**
+	 *	UNIX error number 
+	 *	@var integer $errno  
+	 */
+	var	$errno;	
+
+	/**
+	 *	UNIX error string
+	 *	@var string $errstr 
+	 */
+	var	$errstr;
+
+	/**
+	 *	Same as PHP_SELF but without resorting to global all over the place
+	 *	@var class $self 
+	 */
+	var	$self;
+
+	/**
+	 *	Base home directory for Mediator System
+	 *	@var string $home 
+	 */
+	var	$home;
+
+	/**
+	 *	Timezone to use 
+	 *	@var string $tz
+	 */
+	var	$tz;
+
+	/**
+	 *	Over seer command port number
+	 */
+	var $port;
+
+	/**
+	 *	How much spave is available on $home
+	 *	@var integer $free 
+	 */
+	var	$free;
+
+	/**
+	 * Remote address of connector
+ 	 *
+	 */
+	var $remote;
+
+	/**
+	 *	Language as negotiated between the web client/server
+	 *	@var string $lang 
+	 */
+	var	$lang;	
+
+	/** 
+	 *  Is debuging turned on?
+	 *	@var integer $debug 
+	 */
+	var	$debug;		
+
+	/**
+	 *	FILE* to output debug to
+	 *	@var mixed $dfile 
+	 */
+	var	$dfile;	
+
+	/**
+	 *	UNIX time_t which is used to supply the current data/time
+	 *	@var integer $time The Current Time
+	 */
+	var	$time;
+
+	/**
+	 *	The current time as a float 
+	 *	@var float $floattime The Current Time as a float
+	 */
+	var	$floattime;
+
+	/**
+	 *	The http protocol installed: http/https
+	 *	@var string $httpProtocol
+	 */
+	var	$httpProtocol;
+
+	/**
+	 *	Callback function for error conditions
+	 */
+	var $errorCbackReg ;
+	var	$errorCback;
+
+	/**
+ 	 *	A master constructor, all extended classes should pass through
+	 *	the debug parameter. All objects with the lib library should
+	 *  extend from this object
+	 *
+	 *	@author 	Simon Banks
+  	 *  @access		public
+	 *	@param $debug 0=off,"stdout"=direct,"<filename>=redirect
+	 */
+	function KeyStone($debug=FALSE)
+	{
+		global	$PHP_SELF;
+
+		$this->debug = $debug;
+		if($debug != "stdout")
+		{
+			$this->redirect_debug($debug);
+			if ($debug)
+			{
+				$dfile = $debug . ".times" ;
+				$this->timerOpen ($dfile) ;
+			}
+		}
+
+		$this->debug("Debuging on");
+
+		$this->self = $PHP_SELF;
+		$this->Debug("KeyStone Self: ". $this->self);
+
+		$user = posix_getpwnam("msgmedia");
+		if($user && $user["dir"])
+		{
+			$this->home = $user["dir"];
+		}
+		else
+		{
+			$this->home = MEDIA_HOME_DEFAULT;
+		}
+
+		if(!$this->tz)
+		{
+			$this->tz = getenv("TZ");
+			if(!$this->tz)
+			{
+				$this->tz = "Europe/London";
+			}
+		}
+
+		date_default_timezone_set($home->tz);
+
+		if(!$this->home)
+		{
+			$this->home = getenv("MEDIATOR_HOME");
+			if(!$this->home)
+			{
+				$this->home = MEDIA_HOME_DEFAULT;
+			}
+		}
+
+		$this->free = diskfreespace($this->home);
+
+		$this->host = MEDIA_HOST_DEFAULT;
+		$this->port = MEDIA_PORT_DEFAULT;
+	
+		$this->remote = getenv("REMOTE_ADDR");
+		if(!$this->remote)
+		{
+			$this->remote = MEDIA_REMOTE_DEFAULT;
+		}
+
+		$this->lang = getenv("HTTP_ACCEPT_LANGUAGE");
+		if(!$this->lang)
+		{
+			$this->lang = MEDIA_LANG_DEFAULT;
+		}
+		$this->lang = strtolower($this->lang);
+
+		$this->localhost = getenv("HTTP_HOST");
+		if(!$this->localhost)
+		{
+			$this->localhost = "localhost";
+			$this->localport = 80;
+		}
+		else
+		{
+			$host = explode(":", $this->localhost);
+			$this->localhost  = $host[0];
+			$this->localport  = $host[1];
+		}
+
+		$this->sysname = getenv("HOST");
+		if (!$this->sysname)
+		{
+			$this->sysname = gethostname();
+		}
+
+		$this->time = Time();
+		$this->floattime = $this->getmicrotime();
+		
+		if ( strcmp(getenv("HTTPS"),"on") == 0)
+		{
+			$this->httpProtocol = "https";
+		}
+		else
+		{
+			$this->httpProtocol  = "http"; 
+		}
+	}
+
+	/**
+	 * Standard method for calling an Critical message
+	 *
+	 *  @access		public
+	 *  @return 	void $zip  Should exit and never return
+	 *	@author 	Simon Banks
+	 *	@param 		string $message Critical Error description text
+	 *	@see		#debug
+	 */
+	function Critical($message)
+	{
+		echo "<BR><H1 ID='NOTICE'>Critical Error<BR>$message</H1>\n";
+		$this->debug("Critical:$message");
+		exit;
+	}
+
+	/**
+	 * Standard method for calling an Error message
+	 *
+	 *  @access		public
+	 *  @return 	integer $default Always returns FALSE value
+	 *	@author 	Simon Banks
+	 *	@param 		string $message Error description text
+	 *	@see		#Error
+	 */
+	function Error($message)
+	{
+		if ($this->errorCbackReg)
+		{
+			if ($this->errorCback)
+			{
+				$fn = $this->errorCback ;
+				$fn ($message) ;
+			}
+		}
+		else
+			echo "<BR><H2 ID='NOTICE'>Error: $message</H2>\n";
+
+		$this->debug("Error:$message");
+		return FALSE;
+	}
+
+	/**
+	 *  Register a callback function to be called when an error is generated
+	 *
+	 *  @access		public
+	 *  @return 	integer $default Always returns TRUE value
+	 *	@author 	Anthony Dix 
+	 *	@param 		string $callback      The callback function to call
+	 *	@see		#Error
+	 */
+	function registerErrorCallback($callback)
+	{
+		$this->errorCback = $callback ;
+		$this->errorCbackReg = 1 ;
+		return TRUE;
+	}
+	/**
+	 * Standard method for redirecting debug output
+	 *
+	 *  @access		public
+	 *	@author 	Simon Banks
+	 *	@param 		string $file Filename to redirect debug output
+	 *	@see		#debug
+	 */
+	function redirect_debug($file)
+	{
+		return $this->dfile = @fopen($file, "a+");
+	}
+
+	function timer($start=0)
+	{
+		if ($this->tfile)
+		{
+			list($usec, $sec) = explode(" ",microtime());
+			$ttime = (float)$usec + (float)$sec;
+			if (!$start)
+				return ($ttime) ;
+			else
+			{
+				$timed = $ttime - $start ;
+				return ($timed) ;
+			}
+		}
+	}
+
+	function timerOpen($file)
+	{
+		return $this->tfile = @fopen($file, "a+");
+	}
+
+	function timerClose($file)
+	{
+		if ($this->tfile)
+		{
+			@fclose($this->tfile) ;
+			unset ($this->tfile) ;
+		}
+	}
+
+	function timerWrite($cmd,$start,$status="Success")
+	{
+		if($this->tfile)
+		{
+			$utc = time() ;
+			$timed = $this->timer ($start) ;
+			fputs($this->tfile, "$utc::$cmd::$status::$timed\n");
+		}
+	}
+
+	/**
+	 * Standard method for outputing a debug message
+	 *
+	 *  @access		public
+	 *	@author 	Simon Banks
+	 *	@param 		string $message Debug description text
+	 *	@see		#debug
+	 *	@see		#redirect_debug
+	 */
+	function debug($message)
+	{
+		if($this->dfile)
+		{
+			fputs($this->dfile, "$message\n");
+		}
+		else if($this->debug)
+		{
+			echo "<DT>Debug:".$this->classname.":$message\n";
+		}
+	}
+
+	/**
+	 * Debuging method for dumping out a recursive array to debug
+	 *
+	 *	@access public
+	 *	@author Simon Banks
+	 *	@param array $that Array to be dumped via Debug
+	 *	@param string $prefix What to display before each debug line
+	 *	@see #debug
+	 */
+	function dump($that, $prefix="")
+	{
+		if(!$this->debug)
+		{
+			return;
+		}
+
+		while(list($key, $data) = @each($that))
+		{
+			$this->debug("$prefix key:$key=$data");
+			if(is_array($data))
+			{
+				$this->dump($data, "\t".$prefix);
+			}
+		}
+	}
+
+	/*
+	 * get the current UNIX time as a floating point
+	 */
+
+	function getmicrotime()
+	{
+    	list ($usec, $sec) = explode (" ",microtime());
+    	return ((float)$usec + (float)$sec);
+	}
+
+	/*
+	 * get the elapsed time since the last check
+	 */
+
+	function timeCheck()
+	{
+		$timebefore = $this->floattime ;
+		$this->floattime = $this->getmicrotime() ;
+		return ((float) $this->floattime - (float) $timebefore) ;
+	}
+	
+	/*
+	 * get the http protocol type used: http/https ?
+	 */
+
+	function getUrlType()
+	{
+		return $this->httpProtocol;
+	}
+
+	function is_email($str)
+	{
+		// return 1 if valid email, 0 otherwise
+		//if (ereg("^.+@[^\.].*\.[a-z]{2,}+$", $str))
+		if (ereg("^.+@.+\\..+$", $str))
+			return 1 ;
+		else
+			return 0 ;
+	}
+
+	function is_phone($str)
+	{
+		// return 1 if valid phone number, 0 otherwise
+		if (ereg("^(\(?\+?[0-9]*\)?)?[0-9_\-\ \(\)]*$", $str))
+			return 1 ;
+		else
+			return 0 ;
+	}
+
+	/**
+	 * Verion of explode which honours escaped chars (e.g. \,)
+	 *
+	 *	@access public
+	 *	@author Simon Banks
+	 *	@param string $delim string sperator to chunk string into array
+	 *	@param string $str string to be exploded into a array
+	 *  @return array array version of string
+	 *	@see #debug
+	 */
+	function explode($delim, $str)
+	{
+		$ret = $tag = FALSE;
+		$size = strlen($str);
+		for($i=0; $i < $size; $i++)
+		{
+			if($str[$i] == "\\")
+			{
+				$tag .= "$str[$i]";
+				$i++;
+				$tag .= "$str[$i]";
+			}
+			// We find a delimiter char..
+			//
+			else if($str[$i] == $delim)
+			{
+				$ret[] = $tag;
+				$tag = FALSE;
+			}
+			else // Plain copy
+			{
+				$tag .= "$str[$i]";
+			}
+		}
+
+		$ret[] = $tag;
+		return $ret;
+	}
+}
+
+} /* End of KEYSTONE_OBJECT_DEFINED */
+</SCRIPT>
