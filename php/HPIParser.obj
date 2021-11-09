@@ -1,0 +1,143 @@
+<SCRIPT LANGUAGE=php>
+/*
+    Generic HPI parser used as a generic standalone component
+*/
+if(!$HPI_OBJECT_DEFINED)
+{
+$HPI_OBJECT_DEFINED = TRUE;
+Require_once("lib/KeyStone.obj");
+
+define ("CACHE_BUFFER_SIZE", 30000) ;
+
+class HPI extends KeyStone
+{
+	// Constructor for HPI 
+	//
+	function HPI($debug=FALSE)
+	{
+		$this->KeyStone($debug);
+	}
+	
+	// Public method to decode the passed hpi cmd into a PHP array..
+	//
+	function parse($hpicmd)
+	{
+		$hpicmd .= ";";
+		$this->debug("HPICMD=$hpicmd");
+
+		// Deal with a HPI string of escaped and quoted chars
+		// Abandon all hope all ye you edit here!
+		//
+		$name = $val = $ret = $tag = NULL;
+		$hpisize = strlen($hpicmd);
+		for($i=0; $i < $hpisize; $i++)
+		{
+			switch($hpicmd[$i])
+			{
+				case ";";
+					$ret[$name][] = $val;
+					$i += $hpisize;
+				break;
+
+				// New parameter data
+				case ",";
+					if($val)
+					{
+						$ret[$name][] = $val;
+					}
+					$tag = &$val;
+					$val = NULL;
+				break;
+
+				// Read a quoted string 
+				case "'";
+				case "\"";
+					$qchr = $hpicmd[$i];
+					for($i+=1; $i < $hpisize; $i++)
+					{
+						if($hpicmd[$i] == "\\")
+						{
+							$i++;
+							$tag .= $hpicmd[$i];
+						}
+						else if($hpicmd[$i] == $qchr)
+						{
+							break;
+						}
+						else
+						{
+							$tag .= $hpicmd[$i];
+						}
+					}
+				break;
+
+				case "|";
+				case ":";
+					if($name)
+					{	
+						$ret[$name][] = $val;
+						$val = NULL;
+					}
+					$name = NULL;
+					$tag = &$name;
+				break;
+
+				case "\\";  // Escaped character.. 
+					$i++;
+				default; // Fall through..
+					$tag .= $hpicmd[$i];
+				break;
+			}
+		}
+	
+		// Resolve single array's into data 
+		while(list($para, $data) = @each($ret))
+		{
+			$num  = count($data);
+
+			if($num > 1)
+			{	
+				$result[$para] = $data;
+			}
+			else if($num == 1)
+			{
+				$result[$para] = $data[0];
+			}
+			else
+			{
+				$result[$para] = NULL;
+			}
+		}
+
+		$this->dump($result, "Return:");
+		return $result;
+	} 
+
+	// Public method to convert a HPI array into a HPI string..
+	//
+	function format($hpi)
+	{
+		$line="";
+		foreach($hpi as $feat => $data)
+		{
+			$line=$line.":$feat";
+			if(trim($data) != "") 
+			{
+				if(is_Array($data))
+				{
+					foreach($data as $key => $value)
+					{
+						$line=$line.",$value";
+					}
+				}
+				else
+				{
+					$line=$line.",$data";
+				}
+			}
+		}
+		return $line;
+	}
+}
+}
+</SCRIPT>

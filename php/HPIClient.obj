@@ -1,0 +1,478 @@
+<SCRIPT LANGUAGE=php>
+/*
+    Implementation of Client based HPI fucntion on top of the HPIParser class
+*/
+if(!$HPICLIENT_OBJECT_DEFINED)
+{
+$HPICLIENT_OBJECT_DEFINED = TRUE;
+
+Require_once("HPIParser.obj");
+
+class HPIClient extends HPIParser
+{
+	var $errorCode;
+	var $errorMessage;
+	var $response;
+	
+	var $sock;
+	var $host;
+	var $port;
+	var $timeout=15;
+
+	var $user;
+	var $pswd;
+	var	$sid;
+
+
+	// return the sid
+	function getSID()
+	{
+		$this->debug("getSID() = $this->sid");
+		return $this->sid;
+	}
+
+	function setSID($sid=0, $type=0)
+	{
+		$this->sid 		= $sid;
+		$this->type 	= $type;
+		$this->debug("setSID($sid, $type) from=$this->remote");
+	}
+
+	function getResponseCode()
+	{
+		$buff = @fgets($this->sock, 1024*1024);
+		$this->debug("Got ($buff)");
+		if($buff == "Enter Command: ")
+		{
+			$buff = @fgets($this->sock, 1024*1024);
+			$this->debug("Got ($buff)");
+		}
+
+		$this->response = FALSE;
+		if($buff)	$buff = strstr($buff, "RESP:");
+		if($buff) 	$this->response = StripSlashes($buff);
+
+		if(!$this->response)
+		{
+			$this->errorCode = -1;
+			$this->errorMessage = "Server response does not begin RESP:...: ";
+		}
+		else
+		{
+			$this->debug("Parsing ($this->response) for response data");
+
+			// Check that response begins RESP
+			$hitok = str_getcsv($this->response, ":");
+			$retcode = strtok($hitok[1], ",");
+			$this->debug("retcode:$retcode");
+			$this->errorCode = (int)$retcode;
+			if($retcode > 0)
+			{
+				$estr= strtok(";");
+				$this->errorMessage = str_replace(array('\'', '"'), '', $estr); 
+			}
+		}
+
+		$this->debug("parseResponseCode($this->response, $retcode, $this->errorMessage");
+
+		return $this->errorCode;
+	}
+
+	/**
+	 * Send some request to the server.
+	 * The trailing '\n' is provided.
+	 * On return $response contains the servers response,
+	 * $errorCode contains the response code,
+	 * and $errorMessage contains any message.
+	 * Return TRUE if successful, FALSE if not.
+	 */
+	function doRequest( $request)
+	{
+		$this->debug ("doRequest($request)");
+
+		$this->response = FALSE;
+		if(!$this->sock)
+		{
+			$this->errorCode    = 0x8001;
+			$this->errorMessage = "HPI connection reset by peer";
+			return FALSE;
+		}
+
+		$this->errorCode 	= FALSE;
+		$this->errorMessage = FALSE;
+
+		// Send the request
+		//
+		if(!@fputs($this->sock, "$request\n"))
+		{
+			@fclose($this->sock);
+			$this->sock = FALSE;
+		}
+
+		// Read the login response first
+		if($this->getResponseCode() > 0)
+		{
+			return $this->errorCode == 0;
+		}
+
+		return $this->errorCode == 0;
+	}
+
+	//
+	// Constructor for HPIClient note this is hopw we control where
+	// it connects to..
+	//
+	function HPIClient($debug=FALSE, $host="localhost", $port=3032, $sock=NULL, $timeout=15)
+	{
+		$this->KeyStone($debug);
+		$this->debug("HPIClient(host:$host, port:$port, sock:$sock timeout:$timeout)");
+		$this->timeout = $timeout;
+		if($sock)
+		{
+			$this->sock = $sock;
+			socket_set_timeout($this->sock, $this->timeout);
+		}
+
+		$this->host = $host;
+		$this->port = $port;
+		$this->user = "";
+		$this->pswd = "";
+		$this->sid  = "";
+		$this->response = "";
+		$this->errorMessage = "";
+		$this->errorCode = 0;
+	}
+
+	/**
+	 * Logout from the HPI Server and close the connection.
+	 * $sock is cleared to FALSE.
+	 */
+	function logout()
+	{
+		$this->debug("closing connection");
+		if($this->sock)
+		{
+			@fclose($this->sock);
+			$this->sock = FALSE;
+		}
+	}
+
+	function subInfo($msgfrom)
+	{
+		$this->sock = fsockopen($this->host, $this->port, $errno, $errstr, $this->timeout);
+		if(!$this->sock)
+		{
+			$this->debug ("doLogin(fsockopen failed)");
+			$this->errorMessage = "HPI connection failed";
+			return FALSE;
+		}
+
+		$cmd = "INFO:SUBID,$msgfrom;";
+
+		if($this->doRequest($cmd))
+		{
+			$this->debug ("doLogin(doRequest suceeded)");
+			return TRUE;	
+		}
+
+		$this->debug ("doLogin(doRequest failed)");
+		$this->logout();
+
+		return FALSE;
+	}
+
+	// Main login part
+	//
+	function doLogin($cmd)
+	{
+		$this->debug("doLogin $this->host:$this->port");
+		$this->sock = fsockopen($this->host, $this->port, $errno, $errstr, $this->timeout);
+		if(!$this->sock)
+		{
+			$this->debug ("doLogin(fsockopen failed)");
+			$this->errorMessage = "HPI connection failed";
+			return FALSE;
+		}
+		socket_set_timeout($this->sock, $this->timeout);
+
+		if($this->type)
+		{
+			$cmd = $cmd . ":TYPE,$this->type";
+		}
+
+		if($this->remote)
+		{
+			$cmd = $cmd . ":REMOTE,$this->remote";
+		}
+
+		$cmd = $cmd . ";";
+
+		if($this->doRequest($cmd))
+		{
+			$this->debug ("doLogin(doRequest suceeded)");
+			return TRUE;	
+		}
+
+		$this->debug ("doLogin(doRequest failed)");
+		$this->logout();
+		return FALSE;
+	}
+
+    // Set New Password 
+    //
+    function setPassword($cmd)
+    {
+        $this->sock = fsockopen($this->host, $this->port, $errno, $errstr, $this->timeout);
+        if(!$this->sock)
+        {
+            $this->debug ("doLogin(fsockopen failed)");
+            $this->errorMessage = "HPI connection failed";
+            return FALSE;
+        }
+
+        $cmd = $cmd . ";";
+
+        if($this->doRequest($cmd))
+        {
+            $this->debug ("doLogin(setPassword suceeded)");
+            return TRUE;
+        }
+
+        $this->debug ("doLogin(setPassword failed)");
+        $this->logout();
+        return FALSE;
+    }
+
+    // Login as a subscriber with new pin
+    //
+    function subLoginNewPin($subid, $oldpin, $newpin)
+    {
+        $this->errorCode    = 0;
+        $this->errorMessage = 0;
+
+        $this->subid = $subid;
+        $this->pin   = $oldpin;
+        $this->type  = "SUBSCRIBER";
+
+        $this->debug("subLoginNewPin: subid:$subid pin:$pin newpin:$newpin remote:$this->remote");
+
+        return $this->doLogin("LOGIN:SUBID,$this->subid:PIN,$this->pin:NEWPIN,$newpin");
+	}
+
+	// Login as a subscriber using PIN code
+	//
+	function subLogin($subid, $pin)
+	{
+		$this->errorCode    = 0;
+		$this->errorMessage = 0;
+
+		$this->subid = $subid;
+		$this->pin   = $pin;
+		$this->type  = "SUBSCRIBER";
+
+		$this->debug("subLogin: subid:$subid pin:$pin remote:$this->remote");
+
+		return $this->doLogin("LOGIN:SUBID,$this->subid:PIN,$this->pin");
+	}
+
+	// Login as a subscriber using a PWD
+	//
+	function subLoginSpec($subid, $pwd)
+	{
+		$this->errorCode = 0;
+		$this->errorMessage = 0;
+		$this->subid = $subid;
+		$this->pswd = $pwd;
+		$this->type = "SUBSCRIBER";
+		$this->debug("subLoginSpec: subid:$subid pwd:$pwd remote:$this->remote");
+		return $this->doLogin("LOGIN:SUBID,$this->subid:PWD,$this->pswd");
+	}
+
+
+	// Login with a SID
+	//
+	function sidLogin($sid, $type)
+	{
+		$this->errorCode    = 0;
+		$this->errorMessage = 0;
+
+		$this->sid 	  = $sid;
+		$this->type   = $type;
+
+		$this->debug("sidLogin: type:$type sid:$sid from:$this->remote");
+
+		return $this->doLogin("LOGIN:SID,$this->sid:");
+	}
+
+	// Do a regular login (ADMIN,PROVISION or HPI)
+	//
+	function userLogin($user, $pswd , $type)
+	{
+		$this->errorCode    = 0;
+		$this->errorMessage = 0;
+			
+		$this->user= $user;
+		$this->pswd= $pswd;
+
+		$this->type   = $type;
+	
+		$this->debug("userLogin: user:$user pswd:$pswd use:$type from:$this->remote");
+
+		return $this->doLogin("LOGIN:USER,$this->user:PWD,$this->pswd");
+	}
+
+	function parseResponse($response=NULL) 
+	{
+		if(!$response)
+		{
+			$response = $this->response;
+		}
+
+		// Check that response begins RESP:0:
+		$bits = str_getcsv($response, ":");
+
+		$this->dump($bits, "parseResponse(bits)");
+
+		if($bits[0] != "RESP")
+		{
+			if(!$this->errorMessage)
+				$this->errorMessage = "HPI Protocol error expecting (RESP)";
+			return FALSE;
+		}
+
+		$lits = str_getcsv($bits[1], ",");
+		$this->errorCode 	= intval($lits[0]);
+		$this->errorMessage = $lits[1];
+
+		/* Strip off trailing whilespace */
+		$response = trim($response);
+
+		//
+		// Totaly nasty code to cope with quoted strings
+		// Abandon all hope all ye you edit here!
+		//
+		$name = "RESP";
+		$changed = "";
+		$data = $changed;
+		$respsize = strlen($response);
+		for($i=0; $i < $respsize; $i++)
+		{
+			$current = $response[$i];
+			$rest = substr($response, $i+1);
+
+			switch($current)
+			{
+				// End of line marker
+				case ";";
+					if($data != $changed)
+					{
+						$datum[$name][] = $data;
+					}
+					$data = $changed;
+					$i += $respsize;
+				break;
+
+				// New parameter data
+				case ",";
+					if($data != $changed)
+					{
+						$datum[$name][] = $data;
+					}
+					$data = $changed;
+				break;
+
+				// Read a quoted string 
+				case "\"";
+					if($rest[0] == "\"")
+					{
+						$quoted = "";
+					}
+					else
+					{
+						$quoted = strtok($rest, "\"");
+					}
+
+					$datum[$name][] = $quoted;
+					$i += strlen($quoted)+1;
+					$data = $changed;
+				break;
+
+				case ":";
+					if($data != $changed)
+					{
+						$datum[$name][] = $data;
+					}
+					$name = strtok($rest, ",:;");
+					$i += strlen($name);
+					$data = $changed;
+
+				break;
+
+				default;
+					$data = $data.$current;
+				break;
+			}
+		}
+
+		// Resolve single array's into data 
+		while(list($para, $data) = each($datum))
+		{
+			$num  = count($data);
+
+			if($num > 1)
+			{	
+				$result[$para] = $data;
+			}
+			else if($num == 1)
+			{
+				$result[$para] = $data[0];
+			}
+			else
+			{
+				$result[$para] = FALSE;
+			}
+		}
+
+		$this->dump($result, "parseResponse ret:");
+		return $result;
+	} 
+
+	function processInterface($action, $subid, $vals, $orig, $subsys="")
+	{
+		$hpicmd = FALSE;
+
+		reset($orig);
+		while (list($hpitag, $origval) = each($orig))
+	    {
+			$this->debug("IF: hpi:$hpitag orig:$origval");
+			$value = $vals[$hpitag];
+			if(!isset($value))
+			{
+				continue;
+			}
+
+			$this->debug("IF: hpi:$hpitag value:$value");
+
+			if($value != $origval)
+			{
+				$hpicmd = $hpicmd.":".$hpitag.",\"".$value."\"";;
+			}
+		}
+
+		if($hpicmd)
+		{
+            if ($subsys != "")
+            {
+                return $this->doRequest("$action:SUBSYS,\"$subsys\":SUBID,\"$subid\"$hpicmd;");
+            }
+            else
+            {
+                return $this->doRequest("$action:SUBID,\"$subid\"$hpicmd;");
+            }
+    	}
+		return -1;
+	}
+}
+}
+
+</SCRIPT>

@@ -1,0 +1,137 @@
+#!/usr/bin/python3
+#
+# Script to poll network metrics periodicly and log the results
+#
+import time
+import json
+import subprocess
+from pynetgear import Netgear
+from influxdb import InfluxDBClient
+
+# Settings
+NETGEAR  = '192.168.0.1'
+INFLUX   = 'localhost'
+PORT     = 8086
+USER     = 'root'
+PASSWORD = 'REDACTED'
+DATABASE = 'Speedtest'
+RETRY    = 60
+INTERVAL = 60  # Time between tests (in seconds).
+
+netgear = Netgear(host=NETGEAR, password='REDACTED')
+
+influxdb_client = InfluxDBClient(
+    INFLUX, PORT, USER, PASSWORD, None)
+
+def dbinit():
+    try:
+        databases = influxdb_client.get_list_database()
+    except:
+        print("Error: Failed get_list_databases")
+        raise RuntimeError("No DB connection") from error
+    else:
+        if len(list(filter(lambda x: x['name'] == DATABASE, databases))) == 0:
+            influxdb_client.create_database(DATABASE)
+        else:
+            influxdb_client.switch_database(DATABASE)
+
+def influx_point(cliout):
+    upload = 0.0
+    download = 0.0
+    if netgear:
+        traffic = netgear.get_traffic_meter()
+        upload = traffic['NewTodayUpload']
+        download = traffic['NewTodayDownload']
+
+    data = json.loads(cliout)
+    packetLoss = 0.0
+    if 'packetLoss' in data:
+        packetLoss = float(data['packetLoss'])
+
+    point = [
+        {
+            'measurement': 'usage',
+            'time': data['timestamp'],
+            'fields': {
+                'upload': float(upload),
+                'download': float(download)
+            }
+        },
+        {
+            'measurement': 'ping',
+            'time': data['timestamp'],
+            'fields': {
+                'jitter': float(data['ping']['jitter']),
+                'latency': float(data['ping']['latency'])
+            }
+        },
+        {
+            'measurement': 'download',
+            'time': data['timestamp'],
+            'fields': {
+                # Byte to Megabit
+                'bandwidth': data['download']['bandwidth'] / 125000,
+                'bytes': data['download']['bytes'],
+                'elapsed': data['download']['elapsed']
+            }
+        },
+        {
+            'measurement': 'upload',
+            'time': data['timestamp'],
+            'fields': {
+                # Byte to Megabit
+                'bandwidth': data['upload']['bandwidth'] / 125000,
+                'bytes': data['upload']['bytes'],
+                'elapsed': data['upload']['elapsed']
+            }
+        },
+        {
+            'measurement': 'packetLoss',
+            'time': data['timestamp'],
+            'fields': {
+                'packetLoss': packetLoss
+            }
+        }
+    ]
+
+    return point
+
+
+def main():
+    db_done = False
+    
+    while(db_done == False): 
+        try:
+            dbinit()
+        except:
+            print("Error: DB error")
+            time.sleep(RETRY)
+        else:
+            print("Info: DB done")
+            db_done = True
+        
+        
+    while (db_done): 
+        speedtest = subprocess.run(["speedtest", "-json"], capture_output=True)
+
+        if speedtest.returncode == 0:
+            point = influx_point(speedtest.stdout)
+            print("Info: Speedtest ok")
+            print(point)
+            try:
+                if influxdb_client.write_points(point) == True:
+                    print("Info: Point written to DB ok")
+                    time.sleep(INTERVAL)
+            except:
+                print("Error: DB write point failed")
+                time.sleep(INTERVAL)
+        else:  
+            print("Error: Speedtest error")
+            print(speedtest.stderr)
+            print(speedtest.stdout)
+            time.sleep(INTERVAL)
+
+
+if __name__ == '__main__':
+    print('Speedtest InfluxDB logger')
+    main()
